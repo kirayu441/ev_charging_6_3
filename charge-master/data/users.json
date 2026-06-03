@@ -1,0 +1,34 @@
+{
+  "users": [
+    {
+      "id": "f8bb65da757ebe92",
+      "username": "123",
+      "passwordHash": "c2c0e95422715f8af4fb7289f9319d75:7c28b01cb486c1fb9df8676232c2eee1a12d6eabc8fe0a2094afad28de5c3287a4b78748c8d79db41d4e884057aef23256c7183cb16e1defbc0740be5513b0e1",
+      "createdAt": "2026-05-11T11:16:49.295Z"
+    },
+    {
+      "id": "fcc2d10db3cba1a8",
+      "username": "456",
+      "passwordHash": "f453800f804efc41460ad3604af0bf4b:d3ad18042de2a6ff28499d7983bbd55c87edd3d3c29ac7f26439d5f855f476fa8c11c87f21c9a46ba85b57f4da84a930d39fae3f2762c6480d1f37539a64529e",
+      "createdAt": "2026-05-11T11:24:14.278Z"
+    },
+    {
+      "id": "83951db172217c59",
+      "username": "789",
+      "passwordHash": "db1a357cfdb2ec97dd0f238e95f8e43d:a99eac0e1fbb1421f06302cba57b95fc4bd9fcdf1e33344e76cc51b30095de48b37b53f4383dff4ecf287b8e734a545879ffbff7802eb6b711db04e198a61f03",
+      "createdAt": "2026-05-11T11:24:52.518Z"
+    },
+    {
+      "id": "ff5fb7c369c6cffc",
+      "username": "890",
+      "passwordHash": "d0f50e38c106c454109454a8f31bc224:98285dd4ad9e9a8c7e772ec8c544a4ef2c77704fb41ae13398d3b95b3963fd8fa157b402b5b56a42e050d74f2310728f4465eafc827ade847df2e7991c055121",
+      "createdAt": "2026-05-12T03:48:45.941Z"
+    },
+    {
+      "id": "0a91820b04ad8c01",
+      "username": "qwe",
+      "passwordHash": "db4bc774192ea1ec097a80686464d76b:30eda2cb6dd4042f7c005d308278cf0cc42093c83a0c4e30d124b6df37c409b575115ec07c7453ec795cc46ffb7ef37b18c89253e4d1e2295ce8ee605120ec47",
+      "createdAt": "2026-05-12T03:53:03.311Z"
+    }
+  ]
+}

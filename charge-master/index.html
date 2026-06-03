@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 充电副驾平台</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./config.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="map-stage" aria-label="充电地图">
+        <div id="map" class="map-canvas">
+          <div class="map-fallback" id="mapFallback">
+            <div class="river river-a"></div>
+            <div class="river river-b"></div>
+            <div class="park park-a"></div>
+            <div class="park park-b"></div>
+            <div class="road road-a"></div>
+            <div class="road road-b"></div>
+            <div class="map-label">南京主城区</div>
+          </div>
+        </div>
+        <div class="map-controls" aria-label="地图控制">
+          <button id="locateButton" title="定位">⌖</button>
+          <button id="zoomInButton" title="放大">+</button>
+          <button id="zoomOutButton" title="缩小">−</button>
+        </div>
+      </section>
+
+      <aside class="panel" aria-label="AI 充电副驾">
+        <header class="hero">
+          <button id="mePageButton" class="me-page-button" type="button">我的中心</button>
+          <h1>AI 充电副驾平台</h1>
+          <p>把“找得到”升级成“到得快、等得少、花得省”</p>
+        </header>
+
+        <nav class="tabs" id="tabs">
+          <button class="tab active" data-tab="find">AI找桩</button>
+          <button class="tab" data-tab="explore">充电探索</button>
+        </nav>
+
+        <section class="tab-panel active" id="tab-find">
+          <div class="steps card">
+            <h2>步骤式决策</h2>
+            <div class="step-grid">
+              <label>
+                第一步：目标
+                <select id="goalSelect">
+                  <option value="fast">最快到站</option>
+                  <option value="cheap">最低费用</option>
+                  <option value="queue">最少排队</option>
+                  <option value="personal">个性化偏好</option>
+                </select>
+              </label>
+              <label>
+                第二步：剩余电量(%)
+                <input id="batteryInput" type="number" min="1" max="100" value="30" />
+              </label>
+              <label>
+                可绕路公里
+                <input id="detourInput" type="number" min="1" max="50" value="8" />
+              </label>
+              <label>
+                最低功率(kW)
+                <input id="powerInput" type="number" min="20" max="500" value="120" />
+              </label>
+            </div>
+            <div class="ask-row">
+              <input id="searchInput" type="search" placeholder="例如：我只剩12%电，找附近排队最少的快充；偏好：充电时想吃饭/健身/逛商场/喝咖啡" />
+              <button id="searchButton">智能生成方案</button>
+            </div>
+            <div class="quick-actions" id="quickActions">
+              <button data-prompt="再快一点">再快一点</button>
+              <button data-prompt="再便宜一点">再便宜一点</button>
+              <button data-prompt="排队更少">排队更少</button>
+            </div>
+          </div>
+
+          <div class="grid-two">
+            <section class="card">
+              <div class="card-head">
+                <h3>AI 四方案</h3>
+                <span id="updatedAt">更新中</span>
+              </div>
+              <div class="plans" id="planCards"></div>
+              <h4>候选站点</h4>
+              <div class="station-list" id="stationList"></div>
+            </section>
+          </div>
+          <aside class="card ai-panel collapsed">
+            <button type="button" class="ai-panel-toggle" id="aiPanelToggle" aria-expanded="false" aria-controls="aiPanelBody">
+              <span>推荐说明</span>
+              <span class="ai-panel-arrow" id="aiPanelArrow">▾</span>
+            </button>
+            <div id="aiPanelBody">
+              <ul class="facts" id="aiFacts"></ul>
+            </div>
+          </aside>
+        </section>
+
+        <section class="tab-panel" id="tab-explore">
+          <div class="card">
+            <h2>充电探索</h2>
+            <div class="explore-stack">
+              <section class="explore-card">
+                <div class="explore-title-row">
+                  <h3>热门站点 TOP5</h3>
+                  <div class="explore-actions">
+                    <span class="explore-sub">按当前策略与可达性排序</span>
+                    <button id="toggleTopMapButton" type="button">地图标出TOP5</button>
+                  </div>
+                </div>
+                <ol id="topStations" class="top-stations"></ol>
+              </section>
+              <section class="explore-card">
+                <div class="explore-title-row">
+                  <h3>拥挤风险热力（简版）</h3>
+                  <span class="explore-sub">基于排队时长估算</span>
+                </div>
+                <div class="heat-list" id="heatList"></div>
+                <button id="avoidCrowdButton">一键避拥堵建议</button>
+              </section>
+              <div class="explore-note">
+                建议：优先选择低风险且绕路较少的站点，通勤高峰可提前 20-30 分钟补能。
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="me-page hidden" id="mePage">
+          <div class="card me-page-card">
+            <div class="me-page-head">
+              <h2>我的中心</h2>
+              <button id="closeMePageButton" type="button" class="ghost">关闭</button>
+            </div>
+            <p>账号登录后可同步个人偏好与搜索记录。</p>
+            <div class="me-entry-tabs" id="meEntryTabs">
+              <button class="me-entry-tab active" data-entry="register">注册</button>
+              <button class="me-entry-tab" data-entry="login">登录</button>
+              <button class="me-entry-tab" data-entry="guest">游客模式</button>
+            </div>
+
+            <div class="auth-box" id="authBoxRegister">
+              <div class="auth-head">
+                <h3>注册账号</h3>
+                <span>创建新账号并启用同步</span>
+              </div>
+              <div class="auth-row single">
+                <label class="auth-field">
+                  <span>用户名</span>
+                  <input id="registerUsername" type="text" placeholder="至少 3 位" />
+                </label>
+                <label class="auth-field">
+                  <span>密码</span>
+                  <input id="registerPassword" type="password" placeholder="至少 6 位" />
+                </label>
+              </div>
+              <div class="auth-actions">
+                <button id="registerButton" type="button">立即注册</button>
+              </div>
+              <p class="auth-status">注册后可直接去登录页面登录。</p>
+            </div>
+
+            <div class="auth-box hidden" id="authBoxLogin">
+              <div class="auth-head">
+                <h3>账号登录</h3>
+                <span>登录后同步偏好与历史</span>
+              </div>
+              <div class="auth-row single">
+                <label class="auth-field">
+                  <span>用户名</span>
+                  <input id="loginUsername" type="text" placeholder="请输入用户名" />
+                </label>
+                <label class="auth-field">
+                  <span>密码</span>
+                  <input id="loginPassword" type="password" placeholder="请输入密码" />
+                </label>
+              </div>
+              <div class="auth-actions">
+                <button id="loginButton" type="button">登录</button>
+                <button id="logoutButton" type="button" class="ghost">退出登录</button>
+              </div>
+              <p id="authStatus" class="auth-status">当前：匿名模式</p>
+            </div>
+
+            <div class="auth-box hidden" id="authBoxGuest">
+              <div class="auth-head">
+                <h3>游客模式</h3>
+                <span>无需登录，数据仅保存在当前浏览器</span>
+              </div>
+              <p class="auth-status">你可以直接使用找桩和探索功能，偏好与历史会保存在本地。</p>
+            </div>
+            <div class="me-grid">
+              <div>
+                <h3>偏好</h3>
+                <p id="prefView"></p>
+              </div>
+              <div>
+                <h3>最近搜索</h3>
+                <ul id="historyList"></ul>
+              </div>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <div class="status-pill" id="statusPill">准备就绪</div>
+      <button class="hidden-control" id="trafficButton" aria-hidden="true"></button>
+      <button class="hidden-control" id="distanceButton" aria-hidden="true"></button>
+      <div class="hidden-control" id="quickGrid"></div>
+      <button class="hidden-control" id="homeButton"></button>
+      <button class="hidden-control" id="workButton"></button>
+      <button class="hidden-control" id="favoritesButton"></button>
+      <button class="hidden-control" id="fullscreenButton"></button>
+      <button class="hidden-control" id="showAllButton"></button>
+      <button class="hidden-control" id="cityButton"></button>
+      <div class="hidden-control" id="stationCard"></div>
+      <div class="hidden-control" id="stationCount"></div>
+      <div class="hidden-control" id="assistantTip"></div>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
