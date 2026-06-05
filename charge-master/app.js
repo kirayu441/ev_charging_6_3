@@ -22,6 +22,9 @@
   let activeKeyword = DEFAULT_KEYWORD;
   let currentPlan = { intent: "find_charging_station", sortBy: "distance" };
   let selectedPlanType = "fast";
+  let selectedOperationMode = "auto";
+  let activeOperationProfile = null;
+  let activeBatteryRisk = null;
   let selectedStationIndex = 0;
   let planTopPick = { fast: null, cheap: null, queue: null };
   let personalTags = [];
@@ -34,9 +37,300 @@
 
   const $ = (id) => document.getElementById(id);
   const statusPill = $("statusPill");
+  const OPERATION_MODES = {
+    rush_pickup: {
+      label: "高峰接单模式",
+      scene: "早晚高峰",
+      focus: "减少充电和排队时间，优先接单热区",
+      weights: { distance: 1.15, queue: 1.45, cost: 0.65, safety: 0.8, order: 1.35, power: 1.25 }
+    },
+    midday_recharge: {
+      label: "午间补能模式",
+      scene: "中午低峰",
+      focus: "推荐低价、少排队、适合短休息的站点",
+      weights: { distance: 0.9, queue: 1.15, cost: 1.35, safety: 0.9, order: 0.75, power: 0.9 }
+    },
+    night_saver: {
+      label: "夜间低价模式",
+      scene: "晚上/凌晨",
+      focus: "推荐低价、24小时和安全站点",
+      weights: { distance: 0.85, queue: 0.75, cost: 1.55, safety: 1.45, order: 0.55, power: 0.75 }
+    },
+    low_battery: {
+      label: "低电量应急模式",
+      scene: "电量低于15%",
+      focus: "最近、最快、可达性最高",
+      weights: { distance: 1.75, queue: 1.15, cost: 0.35, safety: 0.85, order: 0.45, power: 1.55 }
+    },
+    transit_hub: {
+      label: "机场高铁站模式",
+      scene: "长距离订单后",
+      focus: "结合返程接单机会推荐",
+      weights: { distance: 1.0, queue: 1.0, cost: 0.75, safety: 1.0, order: 1.75, power: 1.0 }
+    }
+  };
 
   function setStatus(text) {
     if (statusPill) statusPill.textContent = text;
+  }
+
+  function buildOperationProfile(input = {}) {
+    const battery = Number(input.battery ?? $("batteryInput")?.value ?? 30);
+    const prompt = String(input.prompt ?? lastAssistantPrompt ?? $("searchInput")?.value ?? "");
+    const hour = Number.isFinite(Number(input.hour)) ? Number(input.hour) : new Date().getHours();
+    const selected = input.mode || selectedOperationMode || "auto";
+    const manualMode = selected !== "auto" ? selected : "";
+    const inferredMode = manualMode || inferOperationMode({ battery, prompt, hour });
+    const base = OPERATION_MODES[inferredMode] || OPERATION_MODES.rush_pickup;
+    const reason = manualMode
+      ? `已手动切换为${base.label}：${base.focus}`
+      : buildAutoModeReason(inferredMode, { battery, prompt, hour });
+
+    return {
+      key: inferredMode,
+      label: base.label,
+      scene: base.scene,
+      focus: base.focus,
+      weights: base.weights,
+      reason,
+      source: manualMode ? "manual" : "auto"
+    };
+  }
+
+  function inferOperationMode({ battery, prompt, hour }) {
+    const text = String(prompt || "");
+    if (Number.isFinite(battery) && battery < 15) return "low_battery";
+    if (/机场|高铁|火车站|动车|长途|返程|跨城/.test(text)) return "transit_hub";
+    if (hour >= 20 || hour < 6) return "night_saver";
+    if (hour >= 11 && hour < 14) return "midday_recharge";
+    if ((hour >= 7 && hour < 10) || (hour >= 17 && hour < 20)) return "rush_pickup";
+    return "midday_recharge";
+  }
+
+  function buildAutoModeReason(mode, { battery, prompt, hour }) {
+    if (mode === "low_battery") return `已自动进入低电量应急模式：当前电量 ${battery || 0}% ，优先保障可达性。`;
+    if (mode === "transit_hub") return "已自动进入机场高铁站模式：订单场景包含交通枢纽或长距离返程。";
+    if (mode === "night_saver") return `已自动进入夜间低价模式：当前 ${hour}:00 左右，优先低价与安全站点。`;
+    if (mode === "midday_recharge") return `已自动进入午间补能模式：当前 ${hour}:00 左右，适合低峰补电。`;
+    return `已自动进入高峰接单模式：当前 ${hour}:00 左右，优先少排队和接单热区。`;
+  }
+
+  function renderOperationMode(profile = activeOperationProfile) {
+    const mode = profile || buildOperationProfile();
+    activeOperationProfile = mode;
+    const reasonNode = $("operationModeReason");
+    const tagsNode = $("operationModeTags");
+    const dashMode = $("dashMode");
+    if (reasonNode) reasonNode.textContent = mode.reason;
+    if (dashMode) dashMode.textContent = mode.label;
+    if (tagsNode) {
+      tagsNode.innerHTML = [
+        mode.label,
+        mode.scene,
+        mode.focus,
+        mode.source === "auto" ? "自动识别" : "手动指定"
+      ].map((text) => `<span>${text}</span>`).join("");
+    }
+    syncOperationModeCards(mode);
+    return mode;
+  }
+
+  function syncOperationModeCards(mode = activeOperationProfile) {
+    const selectValue = $("operationModeSelect")?.value || "auto";
+    const activeMode = selectValue === "auto" ? "auto" : mode?.key || selectValue;
+    document.querySelectorAll("#operationModeCards button[data-mode]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.mode === activeMode);
+    });
+  }
+
+  function buildBatteryRisk(input = {}) {
+    const battery = Number(input.battery ?? $("batteryInput")?.value ?? 30);
+    const prompt = String(input.prompt ?? lastAssistantPrompt ?? $("searchInput")?.value ?? "");
+    const isTransitOrder = /机场|高铁|火车站|动车|长途|跨城|远距离|返程/.test(prompt);
+
+    if (!Number.isFinite(battery) || battery <= 0) {
+      return {
+        level: "unknown",
+        label: "待评估",
+        title: "请输入当前电量",
+        text: "系统会根据电量判断是否适合继续接单。",
+        actions: ["补充电量后再评估"],
+        shouldEnterEmergency: false,
+        orderAdvice: "等待电量输入"
+      };
+    }
+
+    if (battery < 15) {
+      return {
+        level: "danger",
+        label: "高风险",
+        title: `当前电量仅剩 ${battery}%`,
+        text: "建议优先补能，不建议继续接跨区或长距离订单。系统会优先推荐 3 个可快速到达的快充站。",
+        actions: ["先补能", "只接短途单", "避开机场高铁站"],
+        shouldEnterEmergency: true,
+        orderAdvice: "不建议继续接跨区或长距离订单"
+      };
+    }
+
+    if (battery < 25) {
+      return {
+        level: "warn",
+        label: "中风险",
+        title: `当前电量 ${battery}%`,
+        text: isTransitOrder
+          ? "检测到远距离或交通枢纽订单意图，建议先补能后再接单。"
+          : "可以短时间继续运营，但建议只接短途单，并预留到站补能距离。",
+        actions: isTransitOrder ? ["先补能", "避开长距离订单"] : ["只接短途单", "顺路补能"],
+        shouldEnterEmergency: false,
+        orderAdvice: isTransitOrder ? "建议先补能后再接远距离订单" : "建议只接短途单"
+      };
+    }
+
+    if (battery < 40) {
+      return {
+        level: "notice",
+        label: "可运营",
+        title: `当前电量 ${battery}%`,
+        text: "可以继续接单，建议优先选择顺路订单，并关注附近可补能站点。",
+        actions: ["正常接单", "保留补能备选"],
+        shouldEnterEmergency: false,
+        orderAdvice: "适合继续接短中途订单"
+      };
+    }
+
+    return {
+      level: "safe",
+      label: "低风险",
+      title: `当前电量 ${battery}%`,
+      text: "电量较充足，可以正常接单。系统仍会结合排队和费用给出补能建议。",
+      actions: ["正常接单"],
+      shouldEnterEmergency: false,
+      orderAdvice: "适合正常接单"
+    };
+  }
+
+  function renderBatteryRisk(risk = activeBatteryRisk) {
+    const next = risk || buildBatteryRisk();
+    activeBatteryRisk = next;
+    const card = $("batteryRiskCard");
+    const level = $("batteryRiskLevel");
+    const title = $("batteryRiskTitle");
+    const text = $("batteryRiskText");
+    const actions = $("batteryRiskActions");
+    if (!card || !level || !title || !text || !actions) return next;
+
+    card.className = `battery-risk-card ${next.level}`;
+    level.textContent = next.label;
+    title.textContent = next.title;
+    text.textContent = next.text;
+    actions.innerHTML = next.actions.map((item) => `<button type="button" data-risk-action="${item}">${item}</button>`).join("");
+    const dashBattery = $("dashBattery");
+    const dashAdvice = $("dashAdvice");
+    if (dashBattery) dashBattery.textContent = `${Number($("batteryInput")?.value || 30)}%`;
+    if (dashAdvice) dashAdvice.textContent = next.orderAdvice;
+    return next;
+  }
+
+  function readCostSettings() {
+    return {
+      hourlyIncome: Number($("incomeInput")?.value || 80),
+      detourCostPerKm: Number($("detourCostInput")?.value || 1.5),
+      targetKwh: estimateTargetKwh()
+    };
+  }
+
+  function estimateTargetKwh() {
+    const battery = Number($("batteryInput")?.value || 30);
+    const targetBattery = battery < 15 ? 55 : battery < 25 ? 50 : 45;
+    const batteryGap = Math.max(10, targetBattery - battery);
+    const assumedPackKwh = 60;
+    return Number((assumedPackKwh * batteryGap / 100).toFixed(1));
+  }
+
+  function estimateStationUnitPrice(station, detourKm, queueMinutes) {
+    const hour = new Date().getHours();
+    let base = hour >= 20 || hour < 6 ? 0.95 : hour >= 11 && hour < 14 ? 1.05 : 1.28;
+    const text = `${station.name || ""} ${station.address || ""} ${station.type || ""}`;
+    if (/商场|广场|中心|CBD|酒店/.test(text)) base += 0.12;
+    if (/停车场|服务区|园区/.test(text)) base -= 0.06;
+    if (queueMinutes <= 6) base += 0.04;
+    if (detourKm <= 2) base += 0.03;
+    return Number(Math.max(0.75, Math.min(1.8, base)).toFixed(2));
+  }
+
+  function buildOperationCost(station, queueMinutes, detourKm) {
+    const settings = readCostSettings();
+    const unitPrice = estimateStationUnitPrice(station, detourKm, queueMinutes);
+    const chargingFee = unitPrice * settings.targetKwh;
+    const queueTimeCost = queueMinutes / 60 * settings.hourlyIncome;
+    const detourCost = detourKm * settings.detourCostPerKm;
+    const chargingMinutes = Math.max(8, Math.round(settings.targetKwh / 1.8));
+    const opportunityLoss = (queueMinutes + chargingMinutes) / 60 * settings.hourlyIncome * 0.65;
+    const total = chargingFee + queueTimeCost + detourCost + opportunityLoss;
+
+    return {
+      total: Number(total.toFixed(1)),
+      chargingFee: Number(chargingFee.toFixed(1)),
+      queueTimeCost: Number(queueTimeCost.toFixed(1)),
+      detourCost: Number(detourCost.toFixed(1)),
+      opportunityLoss: Number(opportunityLoss.toFixed(1)),
+      unitPrice,
+      targetKwh: settings.targetKwh,
+      chargingMinutes
+    };
+  }
+
+  function applyBatteryRiskAction(action) {
+    const battery = Number($("batteryInput").value || 30);
+    const promptByAction = {
+      "先补能": "当前电量偏低，先找最近可快速到达的快充站",
+      "只接短途单": "当前电量偏低，建议只接短途单，并找顺路快充备选",
+      "避开机场高铁站": "当前电量偏低，避开机场高铁站等远距离区域，找附近快充",
+      "避开长距离订单": "当前电量不足，避开长距离订单，找附近可补能站点",
+      "顺路补能": "继续接短途单，同时推荐顺路可补能站点",
+      "正常接单": "当前电量允许正常接单，推荐兼顾效率和排队的补能备选",
+      "保留补能备选": "当前可以继续接单，请保留附近可快速补能的备选站点",
+      "补充电量后再评估": "请先补充电量，推荐最近可达快充站"
+    };
+    const prompt = promptByAction[action] || action;
+
+    if (["先补能", "避开机场高铁站", "避开长距离订单", "补充电量后再评估"].includes(action)) {
+      const modeSelect = $("operationModeSelect");
+      if (modeSelect) {
+        modeSelect.value = "low_battery";
+        selectedOperationMode = "low_battery";
+      }
+      activeOperationProfile = renderOperationMode(buildOperationProfile({
+        mode: "low_battery",
+        battery,
+        prompt
+      }));
+      selectedPlanType = "fast";
+      if ($("goalSelect")) $("goalSelect").value = "fast";
+      buildPlanCards();
+    } else if (action === "顺路补能" || action === "保留补能备选") {
+      selectedPlanType = "personal";
+      if ($("goalSelect")) $("goalSelect").value = "personal";
+      buildPlanCards();
+    }
+
+    $("searchInput").value = prompt;
+    activeBatteryRisk = renderBatteryRisk(buildBatteryRisk({ battery, prompt }));
+    rerankBySelectedPlan();
+    runAssistantPlan(prompt);
+  }
+
+  function operationSignals(station, distance, queue, detour, cost) {
+    const text = `${station.name || ""} ${station.address || ""} ${station.type || ""}`;
+    const safeHits = ["24小时", "商场", "广场", "酒店", "停车场", "服务区", "大厦"].filter((kw) => text.includes(kw)).length;
+    const orderHits = ["机场", "高铁", "火车", "车站", "商圈", "广场", "医院", "学校", "大学", "CBD", "中心"].filter((kw) => text.includes(kw)).length;
+    const distanceScore = Math.max(0, 24 - (distance || 2500) / 260);
+    const queueScore = Math.max(0, 24 - queue * 0.9);
+    const costScore = Math.max(0, 22 - cost);
+    const safetyScore = 8 + safeHits * 5;
+    const orderScore = 6 + orderHits * 6;
+    const powerScore = Math.max(4, 18 - detour * 0.7);
+    return { distanceScore, queueScore, costScore, safetyScore, orderScore, powerScore, safeHits, orderHits };
   }
 
   function getDefaultCenter() {
@@ -83,7 +377,7 @@
 
   function renderMeCenter() {
     const p = readProfile();
-    const prefText = `目标: ${p.goal || "最快到站"} | 电量: ${p.battery || 30}% | 绕路: ${p.detour || 8}km | 功率: ${p.power || 120}kW`;
+    const prefText = `目标: ${p.goal || "最快到站"} | 运营模式: ${p.operationModeLabel || "自动识别"} | 接单建议: ${p.orderAdvice || "待评估"} | 电量: ${p.battery || 30}% | 绕路: ${p.detour || 8}km | 功率: ${p.power || 120}kW | 机会收入: ${p.hourlyIncome || 80}元/h`;
     $("prefView").textContent = prefText;
     const list = $("historyList");
     const history = Array.isArray(p.history) ? p.history : [];
@@ -326,16 +620,24 @@
 
   function updateAiFacts(result, goalText) {
     const plan = result?.plan || {};
+    const operationProfile = result?.operationProfile || activeOperationProfile || buildOperationProfile();
+    if (result?.operationProfile) renderOperationMode(result.operationProfile);
+    const batteryRisk = result?.batteryRisk || activeBatteryRisk || buildBatteryRisk();
+    if (result?.batteryRisk) renderBatteryRisk(result.batteryRisk);
     const battery = Number($("batteryInput").value || 30);
     const detour = Number($("detourInput").value || 8);
     const power = Number($("powerInput").value || 120);
+    const costSettings = readCostSettings();
     const hasLLM = Boolean(result?.diagnostics?.usedLLM);
     const intentText = plan.intent === "find_charging_station" ? "找附近更合适的充电站" : "按你的描述做补能推荐";
     const profile = backendPersonalProfile || {};
     const explainTags = profile.tags?.length ? profile.tags.join("、") : "等待后端 AI 识别";
     const facts = [
       `你这次的主要需求是：${goalText}，系统理解为“${intentText}”。`,
+      `当前司机运营模式：${operationProfile.label}。${operationProfile.reason || operationProfile.focus}`,
+      `低电量接单风险：${batteryRisk.label}。${batteryRisk.orderAdvice}。${batteryRisk.text}`,
       `已按你的条件筛选：当前电量 ${battery}% 、可绕路约 ${detour}km、优先功率不低于 ${power}kW。`,
+      `接单机会成本计算：综合运营成本 = 充电费用 + 排队时间成本 + 绕路成本 + 接单机会损失；本次按每小时机会收入 ${costSettings.hourlyIncome} 元、每公里绕路成本 ${costSettings.detourCostPerKm} 元估算。`,
       `个性化偏好关键词：${explainTags}。`,
       "排序时会先估算你到每个站要多快能到，再比较绕路和费用压力，最后用排队时长做风险修正：同等条件下，优先推荐到得更快、绕路更少、排队更短的站点。",
       profile.source === "llm" ? "个性化推荐由后端 AI 偏好解析驱动。" : "个性化推荐当前由规则兜底驱动。",
@@ -441,6 +743,22 @@
     const mockQueue = Math.max(2, Math.min(30, Math.round((distance || 2500) / 320 + (new Date().getHours() % 6) * 2)));
     const mockDetourKm = Math.max(1, Math.round((distance || 2000) / 700));
     const mockCost = Math.max(8, Math.round(12 + mockDetourKm * 1.6 + mockQueue * 0.2));
+    const operationCost = buildOperationCost(station, mockQueue, mockDetourKm);
+    score += Math.max(-12, 18 - operationCost.total / 5);
+    const operationProfile = activeOperationProfile || renderOperationMode();
+    const operationWeight = operationProfile.weights || OPERATION_MODES.rush_pickup.weights;
+    const signals = operationSignals(station, distance, mockQueue, mockDetourKm, mockCost);
+    const operationScore =
+      signals.distanceScore * operationWeight.distance +
+      signals.queueScore * operationWeight.queue +
+      signals.costScore * operationWeight.cost +
+      signals.safetyScore * operationWeight.safety +
+      signals.orderScore * operationWeight.order +
+      signals.powerScore * operationWeight.power;
+    score += operationScore * 0.18;
+    reasons.push(operationProfile.label);
+    if (signals.orderHits > 0) reasons.push("靠近潜在接单区域");
+    if (signals.safeHits > 0) reasons.push("站点环境更稳定");
     const textBlob = `${station.name} ${station.address} ${station.type}`;
     if (goal === "queue") {
       score += Math.max(0, 30 - mockQueue * 1.3);
@@ -450,9 +768,10 @@
     }
     if (goal === "cheap") {
       score += Math.max(0, 36 - mockCost);
+      score += Math.max(-10, 24 - operationCost.total / 3.8);
       score += Math.max(0, 12 - mockDetourKm);
       score -= mockQueue * 0.2;
-      reasons.push(`估算费用指数 ${mockCost}`);
+      reasons.push(`综合运营成本约 ${operationCost.total}元`);
       reasons.push(`绕路约 ${mockDetourKm}km`);
     }
     if (goal === "fast") {
@@ -480,6 +799,8 @@
       queueMinutes: mockQueue,
       detourKm: mockDetourKm,
       costIndex: mockCost,
+      operationCost,
+      operationMode: operationProfile.label,
       recommendation: { score: Number(Math.min(99, score).toFixed(2)), reasons }
     };
   }
@@ -513,29 +834,52 @@
   }
 
   function renderStationList(items) {
+    const stationList = $("stationList");
+    stationList.classList.remove("expanded");
     $("stationList").innerHTML = items.length
       ? items.map((station, index) => {
           const distanceValue = Number.isFinite(station.userDistance) ? station.userDistance : station.distance;
           const distance = distanceValue ? formatDistance(distanceValue) : "附近";
           return `
             <div class="station-item" data-index="${index}">
-              <span class="station-rank">${index + 1}</span>
-              <span class="station-main">
+              <div class="station-top">
+                <span class="station-rank">TOP ${index + 1}</span>
+                <span class="station-cost">运营成本约 <strong>${station.operationCost?.total ?? "--"}元</strong></span>
+              </div>
+              <div class="station-main">
                 <strong>${station.name}</strong>
                 <small>${station.address}</small>
-                <span class="station-meta">
-                  <span>推荐度 ${station.recommendation.score.toFixed(2)}</span>
-                  <span>排队约 ${station.queueMinutes}m</span>
-                  <span>绕路约 ${station.detourKm}km</span>
-                  <span>费用指数 ${station.costIndex}</span>
-                </span>
-              </span>
-              <span class="station-distance">${distance}</span>
-              <button class="nav-station" data-index="${index}" type="button">导航</button>
+              </div>
+              <div class="station-meta">
+                <span>推荐度 ${station.recommendation.score.toFixed(2)}</span>
+                <span>${distance}</span>
+                <span>排队 ${station.queueMinutes}min</span>
+                <span>绕路 ${station.detourKm}km</span>
+                <span>${station.operationMode || activeOperationProfile?.label || "运营模式"}</span>
+              </div>
+              ${station.operationCost ? `
+                <div class="cost-breakdown">
+                  <span><small>充电费</small>${station.operationCost.chargingFee}元</span>
+                  <span><small>排队损失</small>${station.operationCost.queueTimeCost}元</span>
+                  <span><small>绕路成本</small>${station.operationCost.detourCost}元</span>
+                  <span><small>机会损失</small>${station.operationCost.opportunityLoss}元</span>
+                </div>
+              ` : ""}
+              <div class="station-actions">
+                <button class="nav-station" data-index="${index}" type="button">导航</button>
+                <button class="detail-station" data-index="${index}" type="button">详情</button>
+                <button class="reserve-station" data-index="${index}" type="button">设为备选</button>
+              </div>
             </div>
           `;
         }).join("")
       : "<div class='station-item'>暂无站点，请尝试其他条件</div>";
+
+    const showMoreStationsButton = $("showMoreStationsButton");
+    if (showMoreStationsButton) {
+      showMoreStationsButton.classList.toggle("hidden", items.length <= 3);
+      showMoreStationsButton.textContent = "查看全部候选站点";
+    }
 
     document.querySelectorAll(".station-item").forEach((n) => {
       n.addEventListener("click", () => {
@@ -550,11 +894,67 @@
         openNavigation(items[Number(n.dataset.index)]);
       });
     });
+    document.querySelectorAll(".detail-station").forEach((n) => {
+      n.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openStationDetail(items[Number(n.dataset.index)]);
+      });
+    });
+    document.querySelectorAll(".reserve-station").forEach((n) => {
+      n.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const station = items[Number(n.dataset.index)];
+        if (!station) return;
+        selectedStationIndex = Number(n.dataset.index);
+        focusStation(station);
+        setStatus(`已将 ${station.name} 设为补能备选`);
+      });
+    });
 
     updateExplore(items);
     updateTime();
     selectedStationIndex = 0;
     syncRoutePlanUi();
+  }
+
+  function openStationDetail(station) {
+    if (!station) return;
+    const modal = $("stationDetailModal");
+    const title = $("stationDetailTitle");
+    const body = $("stationDetailBody");
+    if (!modal || !title || !body) return;
+    title.textContent = station.name;
+    const cost = station.operationCost;
+    const reasons = station.recommendation?.reasons || [];
+    body.innerHTML = `
+      <div class="detail-summary">
+        <strong>运营成本约 ${cost?.total ?? "--"} 元</strong>
+        <span>推荐度 ${station.recommendation?.score?.toFixed?.(2) || "--"} · 排队 ${station.queueMinutes || "--"}min · 绕路 ${station.detourKm || "--"}km</span>
+      </div>
+      <div class="detail-address">${station.address || "暂无地址"}</div>
+      ${cost ? `
+        <div class="detail-cost-grid">
+          <div><span>充电费用</span><strong>${cost.chargingFee}元</strong></div>
+          <div><span>排队时间成本</span><strong>${cost.queueTimeCost}元</strong></div>
+          <div><span>绕路成本</span><strong>${cost.detourCost}元</strong></div>
+          <div><span>接单机会损失</span><strong>${cost.opportunityLoss}元</strong></div>
+        </div>
+      ` : ""}
+      <div class="detail-reasons">
+        <h3>推荐原因</h3>
+        <ul>${reasons.map((reason) => `<li>${reason}</li>`).join("") || "<li>系统正在等待更多站点数据。</li>"}</ul>
+      </div>
+      <div class="detail-actions">
+        <button type="button" id="detailNavigateButton">导航前往</button>
+        <button type="button" id="detailReserveButton" class="ghost-action">设为备选</button>
+      </div>
+    `;
+    modal.classList.remove("hidden");
+    $("detailNavigateButton")?.addEventListener("click", () => openNavigation(station));
+    $("detailReserveButton")?.addEventListener("click", () => {
+      setStatus(`已将 ${station.name} 设为补能备选`);
+      focusStation(station);
+    });
   }
 
   function renderStations(stations) {
@@ -620,16 +1020,30 @@
     const queue = Math.max(2, Math.min(30, Math.round(distance / 320 + (new Date().getHours() % 6) * 2)));
     const detour = Math.max(1, Math.round(distance / 700));
     const cost = Math.max(8, Math.round(12 + detour * 1.6 + queue * 0.2));
+    const operationCost = buildOperationCost(station, queue, detour);
+    const operationProfile = activeOperationProfile || buildOperationProfile();
+    const operationWeight = operationProfile.weights || OPERATION_MODES.rush_pickup.weights;
+    const signals = operationSignals(station, distance, queue, detour, cost);
     let score = 45;
     if (distance < 1500) score += 22;
     else if (distance < 4000) score += 12;
     else score += 4;
+    score += Math.max(-12, 18 - operationCost.total / 5);
+
+    score +=
+      (signals.distanceScore * operationWeight.distance +
+        signals.queueScore * operationWeight.queue +
+        signals.costScore * operationWeight.cost +
+        signals.safetyScore * operationWeight.safety +
+        signals.orderScore * operationWeight.order +
+        signals.powerScore * operationWeight.power) * 0.18;
 
     if (planType === "fast") {
       score += Math.max(0, 26 - detour * 1.8);
       score += Math.max(0, 18 - queue * 0.7);
     } else if (planType === "cheap") {
       score += Math.max(0, 36 - cost);
+      score += Math.max(-10, 24 - operationCost.total / 3.8);
       score += Math.max(0, 12 - detour);
       score -= queue * 0.2;
     } else {
@@ -696,9 +1110,19 @@
   async function runAssistantPlan(message) {
     const goalMap = { fast: "最快到站", cheap: "最低费用", queue: "最少排队", personal: "个性化偏好" };
     selectedPlanType = $("goalSelect").value;
+    selectedOperationMode = $("operationModeSelect")?.value || "auto";
     const goalText = goalMap[selectedPlanType] || "最快到站";
     const prompt = (message || "").trim() || DEFAULT_KEYWORD;
     lastAssistantPrompt = prompt;
+    activeBatteryRisk = renderBatteryRisk(buildBatteryRisk({
+      battery: Number($("batteryInput").value || 30),
+      prompt
+    }));
+    activeOperationProfile = renderOperationMode(buildOperationProfile({
+      mode: selectedOperationMode,
+      battery: Number($("batteryInput").value || 30),
+      prompt
+    }));
     const personalPref = extractPersonalPreference(prompt);
     personalTags = [];
     backendPersonalProfile = null;
@@ -707,9 +1131,14 @@
 
     writeProfile({
       goal: goalText,
+      operationMode: activeOperationProfile.key,
+      operationModeLabel: activeOperationProfile.label,
+      orderAdvice: activeBatteryRisk.orderAdvice,
       battery: Number($("batteryInput").value || 30),
       detour: Number($("detourInput").value || 8),
-      power: Number($("powerInput").value || 120)
+      power: Number($("powerInput").value || 120),
+      hourlyIncome: Number($("incomeInput").value || 80),
+      detourCostPerKm: Number($("detourCostInput").value || 1.5)
     });
     pushHistory(prompt);
 
@@ -723,6 +1152,13 @@
           message: `${prompt}。目标:${goalText}，当前电量${$("batteryInput").value}%，可绕路${$("detourInput").value}公里，最低功率${$("powerInput").value}kW。个性化偏好:${personalPref || "无"}`,
           city: config.defaultCity || DEFAULT_CITY,
           location: userLocation || lastSearchCenter || getDefaultCenter(),
+          operationMode: selectedOperationMode,
+          operationProfile: activeOperationProfile,
+          batteryRisk: activeBatteryRisk,
+          hour: new Date().getHours(),
+          batteryLevel: Number($("batteryInput").value || 30),
+          hourlyIncome: Number($("incomeInput").value || 80),
+          detourCostPerKm: Number($("detourCostInput").value || 1.5),
           personalPreference: personalPref,
           visibleStations: currentStations.slice(0, 10).map((s) => ({ name: s.name, address: s.address, distance: s.distance, type: s.type }))
         })
@@ -731,6 +1167,9 @@
       if (!response.ok) throw new Error("assistant failed");
       const result = await response.json();
       currentPlan = result.plan || currentPlan;
+      if (result.operationProfile) {
+        activeOperationProfile = renderOperationMode(result.operationProfile);
+      }
       if (result.personalProfile) {
         backendPersonalProfile = result.personalProfile;
         personalTags = Array.isArray(result.personalProfile.tags) ? result.personalProfile.tags : [];
@@ -837,8 +1276,98 @@
   function wireUi() {
     bindTabs();
     renderMeCenter();
+    renderOperationMode();
+    renderBatteryRisk();
     buildPlanCards();
     $("aiFacts").innerHTML = "<li>输入你的需求后，这里会解释为什么推荐这些站点。</li>";
+
+    const operationModeSelect = $("operationModeSelect");
+    if (operationModeSelect) {
+      operationModeSelect.addEventListener("change", () => {
+        selectedOperationMode = operationModeSelect.value;
+        activeOperationProfile = renderOperationMode(buildOperationProfile({
+          mode: selectedOperationMode,
+          battery: Number($("batteryInput").value || 30),
+          prompt: $("searchInput").value
+        }));
+        rerankBySelectedPlan();
+        setStatus(`已切换到${activeOperationProfile.label}`);
+      });
+    }
+
+    const operationModeCards = $("operationModeCards");
+    if (operationModeCards && operationModeSelect) {
+      operationModeCards.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-mode]");
+        if (!button) return;
+        operationModeSelect.value = button.dataset.mode;
+        operationModeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    }
+
+    const strategyModal = $("strategyModal");
+    const openStrategyButton = $("strategySettingsButton");
+    const closeStrategyButton = $("closeStrategyModalButton");
+    const applyStrategyButton = $("applyStrategyButton");
+    const strategyBackdrop = $("strategyModalBackdrop");
+    const openStrategyModal = () => strategyModal && strategyModal.classList.remove("hidden");
+    const closeStrategyModal = () => strategyModal && strategyModal.classList.add("hidden");
+    openStrategyButton?.addEventListener("click", openStrategyModal);
+    closeStrategyButton?.addEventListener("click", closeStrategyModal);
+    strategyBackdrop?.addEventListener("click", closeStrategyModal);
+    applyStrategyButton?.addEventListener("click", () => {
+      closeStrategyModal();
+      activeBatteryRisk = renderBatteryRisk(buildBatteryRisk({
+        battery: Number($("batteryInput").value || 30),
+        prompt: $("searchInput").value
+      }));
+      activeOperationProfile = renderOperationMode(buildOperationProfile({
+        mode: $("operationModeSelect")?.value || "auto",
+        battery: Number($("batteryInput").value || 30),
+        prompt: $("searchInput").value
+      }));
+      rerankBySelectedPlan();
+      setStatus("策略已应用，推荐已刷新");
+    });
+
+    const stationDetailModal = $("stationDetailModal");
+    const closeStationDetail = () => stationDetailModal && stationDetailModal.classList.add("hidden");
+    $("closeStationDetailButton")?.addEventListener("click", closeStationDetail);
+    $("stationDetailBackdrop")?.addEventListener("click", closeStationDetail);
+
+    const showMoreStationsButton = $("showMoreStationsButton");
+    showMoreStationsButton?.addEventListener("click", () => {
+      const list = $("stationList");
+      const expanded = list.classList.toggle("expanded");
+      showMoreStationsButton.textContent = expanded ? "收起候选站点" : "查看全部候选站点";
+    });
+
+    const batteryRiskActions = $("batteryRiskActions");
+    if (batteryRiskActions) {
+      batteryRiskActions.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-risk-action]");
+        if (!button) return;
+        applyBatteryRiskAction(button.dataset.riskAction);
+      });
+    }
+
+    ["batteryInput", "searchInput", "incomeInput", "detourCostInput"].forEach((id) => {
+      const node = $(id);
+      if (!node) return;
+      node.addEventListener("input", () => {
+        activeBatteryRisk = renderBatteryRisk(buildBatteryRisk({
+          battery: Number($("batteryInput").value || 30),
+          prompt: $("searchInput").value
+        }));
+        if (($("operationModeSelect")?.value || "auto") !== "auto") return;
+        activeOperationProfile = renderOperationMode(buildOperationProfile({
+          mode: "auto",
+          battery: Number($("batteryInput").value || 30),
+          prompt: $("searchInput").value
+        }));
+        rerankBySelectedPlan();
+      });
+    });
 
     $("searchButton").addEventListener("click", () => runAssistantPlan($("searchInput").value));
     $("searchInput").addEventListener("keydown", (e) => {

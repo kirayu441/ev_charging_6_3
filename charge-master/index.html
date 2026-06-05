@@ -32,8 +32,23 @@
         <header class="hero">
           <button id="mePageButton" class="me-page-button" type="button">我的中心</button>
           <h1>AI 充电副驾平台</h1>
-          <p>把“找得到”升级成“到得快、等得少、花得省”</p>
+          <p>网约车司机补能决策台</p>
         </header>
+
+        <section class="driver-dashboard" aria-label="司机运营状态">
+          <div class="dash-tile battery">
+            <span>当前电量</span>
+            <strong id="dashBattery">30%</strong>
+          </div>
+          <div class="dash-tile">
+            <span>运营模式</span>
+            <strong id="dashMode">自动识别</strong>
+          </div>
+          <div class="dash-tile wide">
+            <span>接单建议</span>
+            <strong id="dashAdvice">等待评估</strong>
+          </div>
+        </section>
 
         <nav class="tabs" id="tabs">
           <button class="tab active" data-tab="find">AI找桩</button>
@@ -41,8 +56,83 @@
         </nav>
 
         <section class="tab-panel active" id="tab-find">
-          <div class="steps card">
-            <h2>步骤式决策</h2>
+          <div class="decision-grid">
+            <div class="decision-card order-decision-card card">
+              <div class="decision-head">
+                <div>
+                  <span>接单决策</span>
+                  <h2>现在适不适合继续接单</h2>
+                </div>
+                <button id="strategySettingsButton" class="ghost-action" type="button">策略设置</button>
+              </div>
+              <div class="battery-risk-card" id="batteryRiskCard">
+                <div class="battery-risk-main">
+                  <span class="battery-risk-level" id="batteryRiskLevel">电量风险评估</span>
+                  <strong id="batteryRiskTitle">正在评估当前接单风险</strong>
+                  <p id="batteryRiskText">输入当前电量后，系统会判断是否适合继续接单。</p>
+                </div>
+                <div class="battery-risk-actions" id="batteryRiskActions"></div>
+              </div>
+            </div>
+
+            <div class="decision-card charging-decision-card card">
+              <div class="decision-head">
+                <div>
+                  <span>补能决策</span>
+                  <h2>去哪充最不耽误运营</h2>
+                </div>
+              </div>
+              <div class="charging-intent">
+                <strong>按当前策略生成补能方案</strong>
+                <span>综合距离、排队、绕路成本和接单机会损失推荐站点。</span>
+              </div>
+              <div class="ask-row">
+                <input id="searchInput" type="search" placeholder="例如：我只剩12%电，找附近排队最少的快充" />
+                <button id="searchButton">生成方案</button>
+              </div>
+              <div class="quick-actions" id="quickActions">
+                <button data-prompt="再快一点">再快一点</button>
+                <button data-prompt="再便宜一点">再便宜一点</button>
+                <button data-prompt="排队更少">排队更少</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="strategy-modal hidden" id="strategyModal" role="dialog" aria-modal="true" aria-labelledby="strategyModalTitle">
+            <div class="strategy-modal-backdrop" id="strategyModalBackdrop"></div>
+            <div class="strategy-modal-panel">
+              <div class="modal-head">
+                <div>
+                  <span>运营参数</span>
+                  <h2 id="strategyModalTitle">策略设置</h2>
+                </div>
+                <button id="closeStrategyModalButton" type="button" class="ghost-action">关闭</button>
+              </div>
+            <div class="operation-mode-box">
+              <div class="operation-mode-head">
+                <div>
+                  <strong>司机运营模式</strong>
+                  <span id="operationModeReason">系统会按时间、电量和订单场景自动切换策略</span>
+                </div>
+                <select id="operationModeSelect" aria-label="司机运营模式">
+                  <option value="auto">自动识别</option>
+                  <option value="rush_pickup">高峰接单模式</option>
+                  <option value="midday_recharge">午间补能模式</option>
+                  <option value="night_saver">夜间低价模式</option>
+                  <option value="low_battery">低电量应急模式</option>
+                  <option value="transit_hub">机场高铁站模式</option>
+                </select>
+              </div>
+              <div class="operation-mode-cards" id="operationModeCards">
+                <button type="button" data-mode="auto" class="active"><strong>自动</strong><span>按时间、电量、订单识别</span></button>
+                <button type="button" data-mode="rush_pickup"><strong>高峰</strong><span>少排队，靠近热区</span></button>
+                <button type="button" data-mode="midday_recharge"><strong>午间</strong><span>低峰补能，费用优先</span></button>
+                <button type="button" data-mode="night_saver"><strong>夜间</strong><span>低价和安全站点</span></button>
+                <button type="button" data-mode="low_battery"><strong>应急</strong><span>最近最快，可达优先</span></button>
+                <button type="button" data-mode="transit_hub"><strong>枢纽</strong><span>兼顾返程接单机会</span></button>
+              </div>
+              <div class="operation-mode-tags" id="operationModeTags"></div>
+            </div>
             <div class="step-grid">
               <label>
                 第一步：目标
@@ -65,27 +155,34 @@
                 最低功率(kW)
                 <input id="powerInput" type="number" min="20" max="500" value="120" />
               </label>
+              <label>
+                每小时机会收入(元)
+                <input id="incomeInput" type="number" min="20" max="300" value="80" />
+              </label>
+              <label>
+                每公里绕路成本(元)
+                <input id="detourCostInput" type="number" min="0" max="20" step="0.5" value="1.5" />
+              </label>
             </div>
-            <div class="ask-row">
-              <input id="searchInput" type="search" placeholder="例如：我只剩12%电，找附近排队最少的快充；偏好：充电时想吃饭/健身/逛商场/喝咖啡" />
-              <button id="searchButton">智能生成方案</button>
+            <div class="cost-formula">
+              <strong>综合运营成本</strong>
+              <span>充电费用 + 排队时间成本 + 绕路成本 + 接单机会损失</span>
             </div>
-            <div class="quick-actions" id="quickActions">
-              <button data-prompt="再快一点">再快一点</button>
-              <button data-prompt="再便宜一点">再便宜一点</button>
-              <button data-prompt="排队更少">排队更少</button>
+              <div class="modal-actions">
+                <button id="applyStrategyButton" type="button">应用策略</button>
+              </div>
             </div>
           </div>
 
           <div class="grid-two">
-            <section class="card">
+            <section class="card station-section">
               <div class="card-head">
-                <h3>AI 四方案</h3>
+                <h3>推荐站点 TOP3</h3>
                 <span id="updatedAt">更新中</span>
               </div>
-              <div class="plans" id="planCards"></div>
-              <h4>候选站点</h4>
+              <div class="plans compact" id="planCards"></div>
               <div class="station-list" id="stationList"></div>
+              <button id="showMoreStationsButton" class="ghost-action show-more-stations" type="button">查看全部候选站点</button>
             </section>
           </div>
           <aside class="card ai-panel collapsed">
@@ -98,6 +195,20 @@
             </div>
           </aside>
         </section>
+
+        <div class="station-detail-modal hidden" id="stationDetailModal" role="dialog" aria-modal="true" aria-labelledby="stationDetailTitle">
+          <div class="station-detail-backdrop" id="stationDetailBackdrop"></div>
+          <div class="station-detail-panel">
+            <div class="modal-head">
+              <div>
+                <span>站点详情</span>
+                <h2 id="stationDetailTitle">推荐站点</h2>
+              </div>
+              <button id="closeStationDetailButton" type="button" class="ghost-action">关闭</button>
+            </div>
+            <div id="stationDetailBody"></div>
+          </div>
+        </div>
 
         <section class="tab-panel" id="tab-explore">
           <div class="card">
